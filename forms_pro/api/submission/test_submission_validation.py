@@ -125,6 +125,46 @@ class TestEvaluateConditions(unittest.TestCase):
         self.assertTrue(_evaluate_conditions(conditions, {"agreed": 1}, fields))
         self.assertFalse(_evaluate_conditions(conditions, {"agreed": 0}, fields))
 
+    def test_rating_less_than_or_equal(self):
+        """Rating is a 0..1 fraction; builder condition values arrive as strings."""
+        fields = self._field_map(_field("rating", "Rating"))
+        conditions = [{"fieldname": "rating", "operator": "Is Less Than Or Equal To", "value": "0.2"}]
+        self.assertTrue(_evaluate_conditions(conditions, {"rating": 0.2}, fields))
+        self.assertTrue(_evaluate_conditions(conditions, {"rating": 0}, fields))
+        self.assertFalse(_evaluate_conditions(conditions, {"rating": 0.4}, fields))
+        self.assertFalse(_evaluate_conditions(conditions, {}, fields))
+
+    def test_number_comparison_operators(self):
+        fields = self._field_map(_field("score", "Number"))
+
+        def holds(operator, value, submitted):
+            conditions = [{"fieldname": "score", "operator": operator, "value": value}]
+            return _evaluate_conditions(conditions, {"score": submitted}, fields)
+
+        self.assertTrue(holds("Is Less Than", "10", "5"))
+        self.assertFalse(holds("Is Less Than", "10", "10"))
+        self.assertTrue(holds("Is Greater Than", "10", 11))
+        self.assertTrue(holds("Is Greater Than Or Equal To", "10", 10))
+        self.assertFalse(holds("Is Less Than", "abc", 1))
+
+    def test_text_operators(self):
+        fields = self._field_map(_field("note"))
+
+        def holds(operator, value, submitted):
+            conditions = [{"fieldname": "note", "operator": operator, "value": value}]
+            return _evaluate_conditions(conditions, {"note": submitted}, fields)
+
+        self.assertTrue(holds("Contains", "LO", "hello"))
+        self.assertTrue(holds("Does Not Contain", "x", "hello"))
+        self.assertTrue(holds("Starts With", "he", "Hello"))
+        self.assertTrue(holds("Ends With", "LO", "hello"))
+        self.assertFalse(holds("Does Not End With", "lo", "hello"))
+
+    def test_unknown_operator_does_not_match(self):
+        fields = self._field_map(_field("note"))
+        conditions = [{"fieldname": "note", "operator": "Bogus", "value": "x"}]
+        self.assertFalse(_evaluate_conditions(conditions, {"note": "x"}, fields))
+
 
 class TestValidateFormResponse(unittest.TestCase):
     def test_required_field_missing_raises(self):

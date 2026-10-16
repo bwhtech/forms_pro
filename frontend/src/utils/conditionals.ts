@@ -26,6 +26,31 @@ export function parseConditionalLogic(
 }
 
 /**
+ * Field types whose values are compared numerically. Rating is stored by
+ * Frappe as a 0..1 fraction (e.g. 1 of 5 stars = 0.2).
+ */
+const NUMERIC_FIELDTYPES = new Set<string>([
+  Fieldtype.NUMBER,
+  Fieldtype.RATING,
+]);
+
+/**
+ * Convert a value to a finite number, or null if it isn't numeric.
+ * Condition values typed in the builder are stored as strings, so "0.2"
+ * must be parsed before it can be compared against a numeric field value.
+ */
+function toNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const num = Number(value.trim());
+    return Number.isFinite(num) ? num : null;
+  }
+  return null;
+}
+
+/**
  * Get the value of a field from form data, handling different field types
  */
 function getFieldValue(
@@ -42,10 +67,9 @@ function getFieldValue(
     return Boolean(fieldValue);
   }
 
-  // Handle number fields
-  if (fieldType === Fieldtype.NUMBER) {
-    const num = Number(fieldValue);
-    return isNaN(num) ? null : num;
+  // Handle numeric fields (Number, Rating)
+  if (NUMERIC_FIELDTYPES.has(fieldType)) {
+    return toNumber(fieldValue);
   }
 
   // Handle string fields
@@ -69,6 +93,20 @@ function normalizeValue(value: any): string | number | boolean | null {
 }
 
 /**
+ * Compare two values numerically. Returns false if either isn't numeric.
+ */
+function compareNumbers(
+  left: unknown,
+  right: unknown,
+  compare: (a: number, b: number) => boolean
+): boolean {
+  const a = toNumber(left);
+  const b = toNumber(right);
+  if (a === null || b === null) return false;
+  return compare(a, b);
+}
+
+/**
  * Evaluate a single condition against form field values
  */
 function evaluateCondition(
@@ -86,8 +124,13 @@ function evaluateCondition(
   }
 
   const fieldValue = getFieldValue(formValues[fieldname], field.fieldtype);
-  const conditionValue = normalizeValue(value);
   const normalizedFieldValue = normalizeValue(fieldValue);
+  let conditionValue = normalizeValue(value);
+  // Numeric fields: compare the condition value as a number too, so that
+  // "0.2" (as typed in the builder) matches a rating of 0.2.
+  if (NUMERIC_FIELDTYPES.has(field.fieldtype)) {
+    conditionValue = toNumber(conditionValue) ?? conditionValue;
+  }
 
   switch (operator) {
     case ConditionalOperators.Is:
@@ -128,40 +171,32 @@ function evaluateCondition(
         .includes(String(conditionValue).toLowerCase());
 
     case ConditionalOperators.IsLessThan:
-      if (
-        typeof normalizedFieldValue === "number" &&
-        typeof conditionValue === "number"
-      ) {
-        return normalizedFieldValue < conditionValue;
-      }
-      return false;
+      return compareNumbers(
+        normalizedFieldValue,
+        conditionValue,
+        (a, b) => a < b
+      );
 
     case ConditionalOperators.IsLessThanOrEqualTo:
-      if (
-        typeof normalizedFieldValue === "number" &&
-        typeof conditionValue === "number"
-      ) {
-        return normalizedFieldValue <= conditionValue;
-      }
-      return false;
+      return compareNumbers(
+        normalizedFieldValue,
+        conditionValue,
+        (a, b) => a <= b
+      );
 
     case ConditionalOperators.IsGreaterThan:
-      if (
-        typeof normalizedFieldValue === "number" &&
-        typeof conditionValue === "number"
-      ) {
-        return normalizedFieldValue > conditionValue;
-      }
-      return false;
+      return compareNumbers(
+        normalizedFieldValue,
+        conditionValue,
+        (a, b) => a > b
+      );
 
     case ConditionalOperators.IsGreaterThanOrEqualTo:
-      if (
-        typeof normalizedFieldValue === "number" &&
-        typeof conditionValue === "number"
-      ) {
-        return normalizedFieldValue >= conditionValue;
-      }
-      return false;
+      return compareNumbers(
+        normalizedFieldValue,
+        conditionValue,
+        (a, b) => a >= b
+      );
 
     case ConditionalOperators.StartsWith:
       if (normalizedFieldValue === null) return false;

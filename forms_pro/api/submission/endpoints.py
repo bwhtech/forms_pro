@@ -1,4 +1,5 @@
 import json
+from operator import ge, gt, le, lt
 from typing import Any
 
 import frappe
@@ -12,6 +13,8 @@ from forms_pro.utils.permissions import require_permission
 
 from .schema import UserSubmissionResponse
 
+_NUMERIC_FIELDTYPES = ("Number", "Rating")
+
 
 def _coerce_field_value(value: Any, fieldtype: str) -> Any:
     """Coerce a submitted value to its comparable type, matching frontend conditionals.ts logic."""
@@ -20,12 +23,65 @@ def _coerce_field_value(value: Any, fieldtype: str) -> Any:
     # Matches isBoolean types in the frontend registry (Switch, Checkbox)
     if fieldtype in ("Switch", "Checkbox"):
         return bool(value)
-    if fieldtype == "Number":
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
+    # Rating is stored as a 0..1 fraction, so it compares numerically too
+    if fieldtype in _NUMERIC_FIELDTYPES:
+        return _to_number(value)
     return str(value)
+
+
+def _to_number(value: Any) -> float | None:
+    """Convert a value to float, or None if it isn't numeric (bools excluded)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _compare_numbers(actual: Any, expected: Any, compare) -> bool:
+    a, b = _to_number(actual), _to_number(expected)
+    if a is None or b is None:
+        return False
+    return compare(a, b)
+
+
+def _condition_holds(operator: str, actual: Any, expected: Any) -> bool:
+    """Evaluate a single operator, mirroring evaluateCondition in conditionals.ts."""
+    text = "" if actual is None else str(actual).lower()
+    needle = "" if expected is None else str(expected).lower()
+    match operator:
+        case "Is":
+            return actual == expected
+        case "Is Not":
+            return actual != expected
+        case "Is Empty":
+            return actual is None or actual == ""
+        case "Is Not Empty":
+            return actual is not None and actual != ""
+        case "Is Set":
+            return actual is not None
+        case "Contains":
+            return actual is not None and needle in text
+        case "Does Not Contain":
+            return actual is None or needle not in text
+        case "Starts With":
+            return actual is not None and text.startswith(needle)
+        case "Does Not Start With":
+            return actual is None or not text.startswith(needle)
+        case "Ends With":
+            return actual is not None and text.endswith(needle)
+        case "Does Not End With":
+            return actual is None or not text.endswith(needle)
+        case "Is Less Than":
+            return _compare_numbers(actual, expected, lt)
+        case "Is Less Than Or Equal To":
+            return _compare_numbers(actual, expected, le)
+        case "Is Greater Than":
+            return _compare_numbers(actual, expected, gt)
+        case "Is Greater Than Or Equal To":
+            return _compare_numbers(actual, expected, ge)
+    return False
 
 
 def _evaluate_conditions(conditions: list[dict], form_data: dict, field_map: dict) -> bool:
@@ -42,13 +98,7 @@ def _evaluate_conditions(conditions: list[dict], form_data: dict, field_map: dic
         # types match — avoids str(True)=="True" vs "true" mismatches and
         # str(3.0)=="3.0" vs "3" mismatches for Number fields.
         expected_coerced = _coerce_field_value(expected, field.fieldtype)
-        if operator == "Is" and actual != expected_coerced:
-            return False
-        if operator == "Is Not" and actual == expected_coerced:
-            return False
-        if operator == "Is Empty" and actual is not None and actual != "":
-            return False
-        if operator == "Is Not Empty" and (actual is None or actual == ""):
+        if not _condition_holds(operator, actual, expected_coerced):
             return False
     return True
 
